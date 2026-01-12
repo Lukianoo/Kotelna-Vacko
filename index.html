@@ -69,17 +69,16 @@ th {
 </div>
 
 <div class="card buttons">
-  <button onclick="loadToday()">📅 Dnešek</button>
+  <button onclick="loadToday()">📅 Dnes</button>
   <button onclick="loadMonth()">🗓️ Tento měsíc</button>
 </div>
 
 <div class="card">
-  <h3>Historie (souhrn)</h3>
+  <h3>Spotřeba</h3>
   <table>
     <thead>
       <tr>
         <th>Období</th>
-        <th>Průměrný výkon (W)</th>
         <th>Spotřeba (kWh)</th>
       </tr>
     </thead>
@@ -109,7 +108,7 @@ async function loadToday() {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
 
-  renderSummary(data.feeds, start, "Dnes");
+  renderConsumption(data.feeds, start, "Dnes");
 }
 
 async function loadMonth() {
@@ -120,28 +119,23 @@ async function loadMonth() {
   start.setDate(1);
   start.setHours(0, 0, 0, 0);
 
-  renderSummary(data.feeds, start, "Tento měsíc");
+  renderConsumption(data.feeds, start, "Tento měsíc");
 }
 
-function renderSummary(feeds, startTime, label) {
+function renderConsumption(feeds, startTime, label) {
   const tbody = document.getElementById("history");
   tbody.innerHTML = "";
 
-  let powers = [];
   let energies = [];
 
   feeds.forEach(f => {
     const time = new Date(f.created_at);
-    if (time >= startTime) {
-      powers.push(Number(f.field4));
+    if (time >= startTime && f.field2 !== null) {
       energies.push(Number(f.field2));
     }
   });
 
-  if (powers.length === 0) return;
-
-  const avgPower =
-    powers.reduce((a, b) => a + b, 0) / powers.length;
+  if (energies.length < 2) return;
 
   const consumption =
     Math.max(...energies) - Math.min(...energies);
@@ -149,7 +143,6 @@ function renderSummary(feeds, startTime, label) {
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td>${label}</td>
-    <td>${avgPower.toFixed(0)}</td>
     <td>${consumption.toFixed(3)}</td>
   `;
   tbody.appendChild(tr);
@@ -162,3 +155,4 @@ setInterval(loadLatest, 30000);
 
 </body>
 </html>
+
