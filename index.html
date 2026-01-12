@@ -28,6 +28,11 @@ body {
   margin-bottom: 10px;
   text-align: center;
   cursor: pointer;
+  opacity: 0.6;
+}
+
+.switch.active {
+  opacity: 1;
 }
 
 .switch.orange { background: #f57c00; }
@@ -45,9 +50,6 @@ body {
 .card h3 {
   margin-top: 0;
   color: #1565c0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
 }
 
 /* ---------- TABLE ---------- */
@@ -65,10 +67,6 @@ th, td {
   text-align: center;
 }
 
-th {
-  font-weight: bold;
-}
-
 tbody tr:nth-child(even) {
   background: #fafafa;
 }
@@ -79,37 +77,91 @@ tbody tr:nth-child(even) {
 
 <!-- PŘEPÍNAČE -->
 <div class="switches">
-  <div class="switch orange">📅 Denní historie spotřeby</div>
-  <div class="switch blue">🗓️ Měsíční historie spotřeby</div>
-  <div class="switch green">📊 Celková historie spotřeby</div>
+  <div class="switch orange active" onclick="showDaily()">📅 Denní historie spotřeby</div>
+  <div class="switch blue" onclick="showMonthly()">🗓️ Měsíční historie spotřeby</div>
+  <div class="switch green" onclick="showTotal()">📊 Celková historie spotřeby</div>
 </div>
 
 <!-- TABULKA -->
 <div class="card">
-  <h3>📊 Denní historie – uhlí & cena</h3>
+  <h3 id="title">📅 Denní historie – uhlí & cena</h3>
 
   <table>
     <thead>
       <tr>
-        <th>Datum</th>
+        <th>Období</th>
         <th>Spotřeba (kg)</th>
         <th>Cena (Kč)</th>
       </tr>
     </thead>
-    <tbody>
-      <tr><td>12. 1. 2026</td><td>10</td><td>62</td></tr>
-      <tr><td>11. 1. 2026</td><td>30</td><td>186</td></tr>
-      <tr><td>10. 1. 2026</td><td>28</td><td>174</td></tr>
-      <tr><td>9. 1. 2026</td><td>30</td><td>185</td></tr>
-      <tr><td>8. 1. 2026</td><td>34</td><td>210</td></tr>
-      <tr><td>7. 1. 2026</td><td>35</td><td>218</td></tr>
-      <tr><td>6. 1. 2026</td><td>34</td><td>211</td></tr>
-      <tr><td>5. 1. 2026</td><td>33</td><td>205</td></tr>
-      <tr><td>4. 1. 2026</td><td>30</td><td>185</td></tr>
-      <tr><td>3. 1. 2026</td><td>9</td><td>55</td></tr>
-    </tbody>
+    <tbody id="tableBody"></tbody>
   </table>
 </div>
+
+<script>
+// ------------------ DEMO DATA ------------------
+const dailyData = [
+  { label: "12. 1. 2026", kg: 10, price: 62 },
+  { label: "11. 1. 2026", kg: 30, price: 186 },
+  { label: "10. 1. 2026", kg: 28, price: 174 },
+  { label: "9. 1. 2026", kg: 30, price: 185 }
+];
+
+const monthlyData = [
+  { label: "Leden 2026", kg: 167, price: 1020 },
+  { label: "Prosinec 2025", kg: 190, price: 1160 }
+];
+
+const totalData = [
+  { label: "Celkem", kg: 357, price: 2180 }
+];
+
+// ------------------ LOGIKA ------------------
+function setActive(index) {
+  document.querySelectorAll(".switch").forEach((b, i) => {
+    b.classList.toggle("active", i === index);
+  });
+}
+
+function renderTable(data) {
+  const tbody = document.getElementById("tableBody");
+  tbody.innerHTML = "";
+
+  data.forEach(row => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${row.label}</td>
+      <td>${row.kg}</td>
+      <td>${row.price}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function showDaily() {
+  setActive(0);
+  document.getElementById("title").textContent =
+    "📅 Denní historie – uhlí & cena";
+  renderTable(dailyData);
+}
+
+function showMonthly() {
+  setActive(1);
+  document.getElementById("title").textContent =
+    "🗓️ Měsíční historie – uhlí & cena";
+  renderTable(monthlyData);
+}
+
+function showTotal() {
+  setActive(2);
+  document.getElementById("title").textContent =
+    "📊 Celková historie – uhlí & cena";
+  renderTable(totalData);
+}
+
+// init
+showDaily();
+</script>
 
 </body>
 </html>
