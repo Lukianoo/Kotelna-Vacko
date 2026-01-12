@@ -1,93 +1,3 @@
-<!DOCTYPE html>
-<html lang="cs">
-<head>
-<meta charset="UTF-8">
-<title>Elektroměr – přehled</title>
-
-<style>
-body {
-  font-family: Arial, sans-serif;
-  background: #f4f6f8;
-  margin: 0;
-  padding: 20px;
-}
-
-h1 {
-  margin-bottom: 10px;
-}
-
-.card {
-  background: white;
-  padding: 20px;
-  margin-bottom: 15px;
-  border-radius: 8px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-}
-
-.value {
-  font-size: 2em;
-  font-weight: bold;
-}
-
-.buttons button {
-  padding: 10px 15px;
-  margin-right: 10px;
-  font-size: 1em;
-  cursor: pointer;
-}
-
-table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-th, td {
-  padding: 8px;
-  border-bottom: 1px solid #ddd;
-  text-align: left;
-}
-
-th {
-  background: #eee;
-}
-</style>
-</head>
-
-<body>
-
-<h1>⚡ Elektroměr – online přehled</h1>
-
-<div class="card">
-  <div>Aktuální výkon</div>
-  <div class="value" id="power">---</div>
-  <div>W</div>
-</div>
-
-<div class="card">
-  <div>Celková energie</div>
-  <div class="value" id="energy">---</div>
-  <div>kWh</div>
-</div>
-
-<div class="card buttons">
-  <button onclick="loadToday()">📅 Dnešní historie</button>
-  <button onclick="loadMonth()">🗓️ Měsíční historie</button>
-</div>
-
-<div class="card">
-  <h3>Historie</h3>
-  <table>
-    <thead>
-      <tr>
-        <th>Čas</th>
-        <th>Výkon (W)</th>
-        <th>Energie (kWh)</th>
-      </tr>
-    </thead>
-    <tbody id="history"></tbody>
-  </table>
-</div>
-
 <script>
 const CHANNEL_ID = 3224423;
 const BASE_URL = "https://api.thingspeak.com/channels/" + CHANNEL_ID;
@@ -104,30 +14,35 @@ async function loadLatest() {
 }
 
 async function loadToday() {
-  const res = await fetch(BASE_URL + "/feeds.json?results=200");
+  const res = await fetch(BASE_URL + "/feeds.json?results=500");
   const data = await res.json();
-  renderHistory(data.feeds, 1);
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  renderHistory(data.feeds, todayStart);
 }
 
 async function loadMonth() {
-  const res = await fetch(BASE_URL + "/feeds.json?results=800");
+  const res = await fetch(BASE_URL + "/feeds.json?results=2000");
   const data = await res.json();
-  renderHistory(data.feeds, 30);
+
+  const monthStart = new Date();
+  monthStart.setDate(1);
+  monthStart.setHours(0, 0, 0, 0);
+
+  renderHistory(data.feeds, monthStart);
 }
 
-function renderHistory(feeds, days) {
+function renderHistory(feeds, startTime) {
   const tbody = document.getElementById("history");
   tbody.innerHTML = "";
 
-  const now = new Date();
-
-  feeds.reverse().forEach(f => {
+  feeds.forEach(f => {
     const time = new Date(f.created_at);
-    const diffDays = (now - time) / (1000 * 60 * 60 * 24);
 
-    if (diffDays <= days) {
+    if (time >= startTime) {
       const tr = document.createElement("tr");
-
       tr.innerHTML = `
         <td>${time.toLocaleString()}</td>
         <td>${Number(f.field4).toFixed(0)}</td>
@@ -142,7 +57,3 @@ function renderHistory(feeds, days) {
 loadLatest();
 setInterval(loadLatest, 30000);
 </script>
-
-</body>
-</html>
-
