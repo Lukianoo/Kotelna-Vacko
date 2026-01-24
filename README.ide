@@ -15,8 +15,8 @@ Thingspeak: renebahno@seznam.cz , Bahno8855
 unsigned long myChannelNumber = 2333073;
 const char * myWriteAPIKey = "UQ0MY8CJYPTI7U6L";
 
-const char* ssid     = "BPS_Hodonovice_I-SP.cz";
-const char* password = "bpshodonovice";
+const char* ssid     = "HomeNET";
+const char* password = "lemare12";
 
 // ================== CASY ==================
 const unsigned long SEND_INTERVAL   = 120000;      // 2 min
