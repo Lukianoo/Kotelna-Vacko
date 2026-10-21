@@ -1,0 +1,130 @@
+name: Denní součet podavače
+
+on:
+  schedule:
+    # Počítá se vždy CELÝ PŘEDCHOZÍ DEN (pražský čas), takže zpoždění GitHubu nevadí.
+    - cron: '15 2 * * *'
+    - cron: '15 6 * * *'
+  workflow_dispatch:
+    inputs:
+      od:
+        description: 'Dopočítat od data (YYYY-MM-DD), prázdné = včerejšek'
+        required: false
+      do:
+        description: 'Dopočítat do data (YYYY-MM-DD), prázdné = stejné jako "od"'
+        required: false
+
+permissions:
+  contents: write   # zápis data/daily.json do repozitáře
+
+concurrency:
+  group: daily-coal
+  cancel-in-progress: false
+
+jobs:
+  calculate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Spočítat denní dobu chodu podavače
+        env:
+          OD: ${{ github.event.inputs.od }}
+          DO: ${{ github.event.inputs.do }}
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+
+          const SRC_CHANNEL = 2333073;   // kanál kotle Vacko
+          const SRC_FIELD   = 8;         // field8 = celkový čas podavače (sekundy)
+          const FILE        = 'data/daily.json';
+          const TZ          = 'Europe/Prague';
+
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+          function pragueOffsetMin(date) {
+            const s = new Intl.DateTimeFormat('en-US', { timeZone: TZ, timeZoneName: 'longOffset' })
+              .formatToParts(date).find(p => p.type === 'timeZoneName').value;
+            const m = s.match(/GMT([+-])(\d{2}):(\d{2})/);
+            return m ? (m[1] === '-' ? -1 : 1) * (+m[2] * 60 + +m[3]) : 0;
+          }
+          function pragueMidnight(y, mo, d) {
+            const guess = new Date(Date.UTC(y, mo, d));
+            return new Date(guess.getTime() - pragueOffsetMin(guess) * 60000);
+          }
+          function pragueToday() {
+            const [y, m, d] = new Intl.DateTimeFormat('en-CA', { timeZone: TZ })
+              .format(new Date()).split('-').map(Number);
+            return { y, m: m - 1, d };
+          }
+          const tsFmt = dt => dt.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+
+          async function getJson(url) {
+            for (let i = 0; i < 4; i++) {
+              try { const r = await fetch(url); if (r.ok) return await r.json(); } catch (e) {}
+              await sleep(5000);
+            }
+            throw new Error('Nepodařilo se stáhnout: ' + url);
+          }
+
+          // Součet kladných přírůstků čítače.
+          // Pokles = restart NodeMCU (návrat na hodnotu z EEPROM) → nepočítá se,
+          // pád skoro na nulu (nový začátek čítače) → započítá se nová hodnota.
+          function feederSec(vals) {
+            let sec = 0;
+            for (let i = 1; i < vals.length; i++) {
+              const diff = vals[i] - vals[i - 1];
+              if (diff >= 0) sec += diff;
+              else if (vals[i] < 3600) sec += vals[i];
+            }
+            return sec;
+          }
+
+          async function processDay(y, mo, d) {
+            const label = `${y}-${String(mo + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+            const start = pragueMidnight(y, mo, d);
+            const end   = pragueMidnight(y, mo, d + 1);
+            const src = await getJson(`https://api.thingspeak.com/channels/${SRC_CHANNEL}/fields/${SRC_FIELD}.json`
+              + `?start=${encodeURIComponent(tsFmt(start))}&end=${encodeURIComponent(tsFmt(end))}&results=8000`);
+            const vals = (src.feeds || []).map(f => parseFloat(f[`field${SRC_FIELD}`])).filter(Number.isFinite);
+            if (vals.length < 2) { console.log(`⚪ ${label}: bez dat`); return [label, null]; }
+            const sec = Math.round(feederSec(vals));
+            console.log(`📊 ${label}: ${vals.length} záznamů, podavač ${sec} s`);
+            return [label, sec];
+          }
+
+          async function main() {
+            const data = fs.existsSync(FILE) ? JSON.parse(fs.readFileSync(FILE, 'utf8')) : {};
+            const t = pragueToday();
+            let from, to;
+            if (process.env.OD) {
+              const [y, m, d] = process.env.OD.split('-').map(Number);
+              from = new Date(Date.UTC(y, m - 1, d));
+              const [y2, m2, d2] = (process.env.DO || process.env.OD).split('-').map(Number);
+              to = new Date(Date.UTC(y2, m2 - 1, d2));
+            } else {
+              from = to = new Date(Date.UTC(t.y, t.m, t.d - 1));   // včerejšek
+            }
+            for (let day = from; day <= to; day = new Date(day.getTime() + 86400000)) {
+              const [label, sec] = await processDay(day.getUTCFullYear(), day.getUTCMonth(), day.getUTCDate());
+              if (sec !== null) data[label] = sec;
+            }
+            const sorted = Object.fromEntries(Object.entries(data).sort(([a], [b]) => a.localeCompare(b)));
+            fs.mkdirSync('data', { recursive: true });
+            fs.writeFileSync(FILE, JSON.stringify(sorted, null, 1) + '\n');
+            console.log(`✅ Hotovo, v souboru je ${Object.keys(sorted).length} dní.`);
+          }
+
+          main().catch(e => { console.error('❌', e); process.exit(1); });
+          EOF
+
+      - name: Uložit do repozitáře
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898332+github-actions[bot]@users.noreply.github.com"
+          git add data/daily.json
+          if git diff --cached --quiet; then echo "Beze změny."; exit 0; fi
+          git commit -m "Denní spotřeba: aktualizace"
+          git pull --rebase
+          git push
