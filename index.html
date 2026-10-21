@@ -239,7 +239,6 @@ const EFF = 0.75;
 const KG_PER_10MIN = 2.4;   // kg uhlí za 10 min chodu podavače
 const PRICE_PER_KG = 6.4;   // Kč za 1 kg uhlí
 const TZ = "Europe/Prague";
-const DATA_FROM = "2023-01-01 00:00:00"; // odkud hledat data pro celkovou/sezónní historii
 kg10minInfo.textContent = KG_PER_10MIN.toLocaleString("cs-CZ") + " kg";
 priceKgInfo.textContent = PRICE_PER_KG.toLocaleString("cs-CZ") + " Kč";
 
@@ -266,8 +265,6 @@ function tsLocal(d){
 }
 function todayStart(){ const d=new Date(); d.setHours(0,0,0,0); return d; }
 function monthStart(){ const d=todayStart(); d.setDate(1); return d; }
-function dayKey(d){ return d.toLocaleDateString("cs-CZ"); }
-function monthKey(d){ return d.getFullYear()*100 + d.getMonth(); }
 
 // ── Topná sezóna: 1. září – 31. srpna ──────────────────────────────
 function seasonStartYear(d){ return d.getMonth() >= 8 ? d.getFullYear() : d.getFullYear() - 1; }
@@ -299,32 +296,32 @@ function toPoints(feeds){
     .filter(p=>Number.isFinite(p.v) && !isNaN(p.t));
 }
 
-// Hodinová řada čítače od DATA_FROM do teď (po částech, ThingSpeak vrací max 8000 bodů).
-// Uloží se na 15 minut, aby se data nestahovala pro každé tlačítko znovu.
-let seriesCache=null, seriesTime=0;
-async function hourlySeries(){
-  if(seriesCache && Date.now()-seriesTime < 15*60000) return seriesCache;
-  const CHUNK_DAYS=300;
-  let start=new Date(DATA_FROM.replace(" ","T"));
-  const now=new Date();
-  let pts=[];
-  while(start<now){
-    const end=new Date(start); end.setDate(end.getDate()+CHUNK_DAYS);
-    const f=await fetchFeeds(`timescale=60&start=${encodeURIComponent(tsLocal(start))}&end=${encodeURIComponent(tsLocal(end<now?end:now))}&results=8000`);
-    pts=pts.concat(toPoints(f));
-    start=end;
-  }
-  // poslední aktuální hodnota, aby byla započítaná i rozběhnutá hodina
-  const last=toPoints(await fetchFeeds("results=1"));
-  pts=pts.concat(last);
-  pts.sort((a,b)=>a.t-b.t);
-  pts=pts.filter((p,i)=>i===0 || p.t-pts[i-1].t>0);
-  seriesCache=feederDiffs(pts); seriesTime=Date.now();
-  return seriesCache;
+// Denní součty chodu podavače (sekundy) – počítá je každou noc GitHub (daily_coal.yml)
+// a ukládá do data/daily.json v tomto repozitáři. Dnešek se dopočítá živě z ThingSpeaku.
+const DAILY_URL = "https://raw.githubusercontent.com/Lukianoo/Kotelna-Vacko/main/data/daily.json";
+let dailyCache=null, dailyTime=0;
+async function todaySec(){
+  const f=await fetchFeeds(`start=${encodeURIComponent(tsLocal(todayStart()))}&results=2000`);
+  return feederDiffs(toPoints(f)).reduce((s,x)=>s+x.sec,0);
 }
-function sumKg(diffs, from, to){
+async function loadDaily(){
+  if(dailyCache && Date.now()-dailyTime < 15*60000) return dailyCache;
+  let json={};
+  try{ json = await fetch(DAILY_URL, {cache:"no-store"}).then(r=>r.ok?r.json():{}); }catch(e){}
+  const days = Object.entries(json).map(([k,sec])=>{
+    const [y,m,d]=k.split("-").map(Number);
+    return {t:new Date(y,m-1,d), sec:+sec||0};
+  });
+  const today=todayStart();
+  const rest=days.filter(x=>x.t<today);
+  rest.push({t:today, sec:await todaySec()});
+  rest.sort((a,b)=>a.t-b.t);
+  dailyCache=rest; dailyTime=Date.now();
+  return dailyCache;
+}
+function sumKg(days, from, to){
   let sec=0;
-  for(const d of diffs) if(d.t>=from && (!to || d.t<to)) sec+=d.sec;
+  for(const d of days) if(d.t>=from && (!to || d.t<to)) sec+=d.sec;
   return secToKg(sec);
 }
 
@@ -369,24 +366,22 @@ async function updateHour(){
 }
 
 async function updateDay(){
-  const f=await fetchFeeds(`start=${encodeURIComponent(tsLocal(todayStart()))}&results=2000`);
-  const d=feederDiffs(toPoints(f));
-  const kg=secToKg(d.reduce((s,x)=>s+x.sec,0));
+  const kg=secToKg(await todaySec());
   kgDay.textContent=kg.toFixed(0)+" kg";
   costDay.textContent=(kg*PRICE_PER_KG).toFixed(0)+" Kč";
 }
 
 async function updateMonth(){
-  const diffs=await hourlySeries();
-  const kg=sumKg(diffs, monthStart());
+  const days=await loadDaily();
+  const kg=sumKg(days, monthStart());
   kgMonth.textContent = kg.toFixed(0) + " kg";
   costMonth.textContent = (kg * PRICE_PER_KG).toFixed(0) + " Kč";
 }
 
 async function updateSeason(){
-  const diffs=await hourlySeries();
+  const days=await loadDaily();
   const y=seasonStartYear(new Date());
-  const kg=sumKg(diffs, new Date(y,8,1));
+  const kg=sumKg(days, new Date(y,8,1));
   seasonLabel.textContent = seasonName(y);
   kgSeason.textContent = kg.toFixed(0) + " kg";
   costSeason.textContent = (kg * PRICE_PER_KG).toFixed(0) + " Kč";
@@ -399,12 +394,12 @@ function row(label, kg){
 historyBtn.onclick=async()=>{
   historyBox.style.display=historyBox.style.display==="none"?"block":"none";
   historyTable.innerHTML="";
-  const diffs=await hourlySeries();
+  const days=await loadDaily();
   let html="";
   for(let i=0;i<30;i++){
     const d1=todayStart(); d1.setDate(d1.getDate()-i);
     const d2=new Date(d1); d2.setDate(d2.getDate()+1);
-    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(diffs,d1,d2));
+    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2));
   }
   historyTable.innerHTML=html;
 };
@@ -413,12 +408,12 @@ monthHistoryBtn.onclick = async () => {
   monthHistoryBox.style.display =
     monthHistoryBox.style.display === "none" ? "block" : "none";
   monthHistoryTable.innerHTML = "";
-  const diffs=await hourlySeries();
+  const days=await loadDaily();
   let html="";
   for (let i = 0; i < 12; i++) {
     const s = monthStart(); s.setMonth(s.getMonth() - i);
     const e = new Date(s); e.setMonth(e.getMonth() + 1);
-    html+=row(s.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" }), sumKg(diffs,s,e));
+    html+=row(s.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" }), sumKg(days,s,e));
   }
   monthHistoryTable.innerHTML=html;
 };
@@ -427,9 +422,9 @@ seasonHistoryBtn.onclick = async () => {
   seasonHistoryBox.style.display =
     seasonHistoryBox.style.display === "none" ? "block" : "none";
   seasonHistoryTable.innerHTML = "";
-  const diffs=await hourlySeries();
+  const days=await loadDaily();
   const seasons={};
-  for(const d of diffs){ const y=seasonStartYear(d.t); seasons[y]=(seasons[y]||0)+d.sec; }
+  for(const d of days){ const y=seasonStartYear(d.t); seasons[y]=(seasons[y]||0)+d.sec; }
   const keys=Object.keys(seasons).map(Number).sort((a,b)=>b-a);
   seasonHistoryTable.innerHTML = keys.length
     ? keys.map(y=>row(seasonName(y), secToKg(seasons[y]))).join("")
@@ -440,14 +435,14 @@ totalHistoryBtn.onclick = async () => {
   totalHistoryBox.style.display =
     totalHistoryBox.style.display === "none" ? "block" : "none";
   totalHistoryTable.innerHTML = "";
-  const diffs=await hourlySeries();
-  if(!diffs.length){
+  const days=await loadDaily();
+  if(!days.length){
     totalHistoryTable.innerHTML = `<tr><td colspan="3">⛔ Zatím nejsou žádná data</td></tr>`;
     return;
   }
-  const kg=secToKg(diffs.reduce((s,x)=>s+x.sec,0));
+  const kg=secToKg(days.reduce((s,x)=>s+x.sec,0));
   totalHistoryTable.innerHTML = row(
-    `Celé období (${diffs[0].t.toLocaleDateString("cs-CZ")} – ${new Date().toLocaleDateString("cs-CZ")})`, kg);
+    `Celé období (${days[0].t.toLocaleDateString("cs-CZ")} – ${new Date().toLocaleDateString("cs-CZ")})`, kg);
 };
 
 updateClock();updateCurrent();updateHour();updateDay();updateMonth();updateSeason();updateOutsideTemp();
