@@ -187,6 +187,7 @@ footer img:hover{
       <tr>
         <th>Sezóna</th>
         <th>Spotřeba (kg)</th>
+        <th>Cena za 1 kg</th>
         <th>Cena (Kč)</th>
       </tr>
     </thead>
@@ -222,7 +223,8 @@ footer img:hover{
     <div class="value blue" id="priceKgInfo">--</div>
   </div>
 </div>
-<div class="sub" style="margin-top:10px">Hodnoty se mění v kódu stránky (index.html) – KG_PER_10MIN a PRICE_PER_KG.</div>
+<div class="sub" style="margin-top:10px" id="seasonPricesInfo"></div>
+<div class="sub" style="margin-top:10px">Hodnoty se mění v kódu stránky (index.html) – KG_PER_10MIN, PRICE_PER_KG a SEASON_PRICES.</div>
 </div>
 
 </main>
@@ -238,9 +240,18 @@ const EFF = 0.75;
 // ── Jednotné nastavení ──────────────────────────────────────────────
 const KG_PER_10MIN = 2.4;   // kg uhlí za 10 min chodu podavače
 const PRICE_PER_KG = 6.4;   // Kč za 1 kg uhlí
+// Cena uhlí podle topné sezóny (klíč = rok, kdy sezóna začíná 1. září). Novou sezónu přidej sem.
+const SEASON_PRICES = { 2025: 6.2, 2026: 6.4 };
+function priceForSeason(y){ return SEASON_PRICES[y] ?? PRICE_PER_KG; }
+function priceFor(d){ return priceForSeason(d.getMonth() >= 8 ? d.getFullYear() : d.getFullYear() - 1); }
+function fmtPrice(p){ return p.toLocaleString("cs-CZ",{minimumFractionDigits:1}) + " Kč"; }
+function seasonPricesText(){
+  return Object.entries(SEASON_PRICES).map(([y,p])=>`${+y}/${+y+1}: ${fmtPrice(p)}`).join(" · ");
+}
 const TZ = "Europe/Prague";
 kg10minInfo.textContent = KG_PER_10MIN.toLocaleString("cs-CZ") + " kg";
-priceKgInfo.textContent = PRICE_PER_KG.toLocaleString("cs-CZ") + " Kč";
+priceKgInfo.textContent = fmtPrice(priceFor(new Date()));
+seasonPricesInfo.textContent = "Cena za 1 kg podle sezóny: " + seasonPricesText();
 
 function updateClock(){
   clock.textContent = new Date().toLocaleString("cs-CZ");
@@ -368,14 +379,14 @@ async function updateHour(){
 async function updateDay(){
   const kg=secToKg(await todaySec());
   kgDay.textContent=kg.toFixed(0)+" kg";
-  costDay.textContent=(kg*PRICE_PER_KG).toFixed(0)+" Kč";
+  costDay.textContent=(kg*priceFor(new Date())).toFixed(0)+" Kč";
 }
 
 async function updateMonth(){
   const days=await loadDaily();
   const kg=sumKg(days, monthStart());
   kgMonth.textContent = kg.toFixed(0) + " kg";
-  costMonth.textContent = (kg * PRICE_PER_KG).toFixed(0) + " Kč";
+  costMonth.textContent = (kg * priceFor(new Date())).toFixed(0) + " Kč";
 }
 
 async function updateSeason(){
@@ -384,11 +395,17 @@ async function updateSeason(){
   const kg=sumKg(days, new Date(y,8,1));
   seasonLabel.textContent = seasonName(y);
   kgSeason.textContent = kg.toFixed(0) + " kg";
-  costSeason.textContent = (kg * PRICE_PER_KG).toFixed(0) + " Kč";
+  costSeason.textContent = (kg * priceForSeason(y)).toFixed(0) + " Kč";
 }
 
-function row(label, kg){
-  return `<tr><td>${label}</td><td>${kg.toFixed(0)}</td><td>${(kg*PRICE_PER_KG).toFixed(0)}</td></tr>`;
+function row(label, kg, cost){
+  return `<tr><td>${label}</td><td>${kg.toFixed(0)}</td><td>${cost.toFixed(0)}</td></tr>`;
+}
+// cena za období – každý den podle ceny své sezóny
+function sumCost(days, from, to){
+  let c=0;
+  for(const d of days) if(d.t>=from && (!to || d.t<to)) c+=secToKg(d.sec)*priceFor(d.t);
+  return c;
 }
 
 historyBtn.onclick=async()=>{
@@ -399,7 +416,7 @@ historyBtn.onclick=async()=>{
   for(let i=0;i<30;i++){
     const d1=todayStart(); d1.setDate(d1.getDate()-i);
     const d2=new Date(d1); d2.setDate(d2.getDate()+1);
-    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2));
+    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2), sumCost(days,d1,d2));
   }
   historyTable.innerHTML=html;
 };
@@ -413,7 +430,7 @@ monthHistoryBtn.onclick = async () => {
   for (let i = 0; i < 12; i++) {
     const s = monthStart(); s.setMonth(s.getMonth() - i);
     const e = new Date(s); e.setMonth(e.getMonth() + 1);
-    html+=row(s.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" }), sumKg(days,s,e));
+    html+=row(s.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" }), sumKg(days,s,e), sumCost(days,s,e));
   }
   monthHistoryTable.innerHTML=html;
 };
@@ -427,8 +444,9 @@ seasonHistoryBtn.onclick = async () => {
   for(const d of days){ const y=seasonStartYear(d.t); seasons[y]=(seasons[y]||0)+d.sec; }
   const keys=Object.keys(seasons).map(Number).sort((a,b)=>b-a);
   seasonHistoryTable.innerHTML = keys.length
-    ? keys.map(y=>row(seasonName(y), secToKg(seasons[y]))).join("")
-    : `<tr><td colspan="3">⛔ Zatím nejsou žádná data</td></tr>`;
+    ? keys.map(y=>{ const kg=secToKg(seasons[y]), p=priceForSeason(y);
+        return `<tr><td>${seasonName(y)}</td><td>${kg.toFixed(0)}</td><td>${fmtPrice(p)}</td><td>${(kg*p).toFixed(0)}</td></tr>`; }).join("")
+    : `<tr><td colspan="4">⛔ Zatím nejsou žádná data</td></tr>`;
 };
 
 totalHistoryBtn.onclick = async () => {
@@ -442,7 +460,8 @@ totalHistoryBtn.onclick = async () => {
   }
   const kg=secToKg(days.reduce((s,x)=>s+x.sec,0));
   totalHistoryTable.innerHTML = row(
-    `Celé období (${days[0].t.toLocaleDateString("cs-CZ")} – ${new Date().toLocaleDateString("cs-CZ")})`, kg);
+    `Celé období (${days[0].t.toLocaleDateString("cs-CZ")} – ${new Date().toLocaleDateString("cs-CZ")})`, kg, sumCost(days, new Date(0)))
+    + `<tr><td colspan="3" class="sub">ℹ️ Cena za 1 kg uhlí: ${seasonPricesText()}</td></tr>`;
 };
 
 updateClock();updateCurrent();updateHour();updateDay();updateMonth();updateSeason();updateOutsideTemp();
