@@ -57,9 +57,11 @@ button{
 #historyBtn { background-color: #ef6c00; color: #fff; }
 #monthHistoryBtn { background-color: #1565c0; color: #fff; }
 #totalHistoryBtn { background-color: #2e7d32; color: #fff; }
+#seasonHistoryBtn { background-color: #6a1b9a; color: #fff; }
 #historyBtn:hover,
 #monthHistoryBtn:hover,
-#totalHistoryBtn:hover { opacity: 0.85; }
+#totalHistoryBtn:hover,
+#seasonHistoryBtn:hover { opacity: 0.85; }
 table{width:100%;border-collapse:collapse}
 th,td{padding:8px;text-align:center}
 th{background:#eee}
@@ -89,7 +91,7 @@ footer img:hover{
   .sub { font-size: 12px; }
   .settings { grid-template-columns:1fr; }
   .grid { grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); }
-  #historyBox table, #totalHistoryBox table {
+  #historyBox table, #totalHistoryBox table, #seasonHistoryBox table {
     display: block;
     overflow-x: auto;
     white-space: nowrap;
@@ -138,12 +140,15 @@ footer img:hover{
   <div><div class="sub">MĚSÍC</div><div class="value blue" id="kgMonth">0 kg</div></div>
   <div><div class="sub">CENA DNES</div><div class="value" id="costDay">0 Kč</div></div>
   <div><div class="sub">CENA MĚSÍC</div><div class="value" id="costMonth">0 Kč</div></div>
+  <div><div class="sub">SEZÓNA <span id="seasonLabel"></span></div><div class="value" style="color:#6a1b9a" id="kgSeason">0 kg</div></div>
+  <div><div class="sub">CENA SEZÓNA</div><div class="value" id="costSeason">0 Kč</div></div>
 </div>
 
 <br>
 <div class="buttons-wrapper">
   <button id="historyBtn">📅 Denní historie spotřeby</button>
   <button id="monthHistoryBtn">📆 Měsíční historie spotřeby</button>
+  <button id="seasonHistoryBtn">🍂 Sezónní historie spotřeby (září – srpen)</button>
   <button id="totalHistoryBtn">📈 Celková historie spotřeby</button>
 </div>
 </div>
@@ -175,6 +180,20 @@ footer img:hover{
   </table>
 </div>
 
+<div id="seasonHistoryBox" class="card" style="display:none;margin-top:20px">
+  <h2>🍂 Sezónní historie – topná sezóna 1. 9. – 31. 8.</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Sezóna</th>
+        <th>Spotřeba (kg)</th>
+        <th>Cena (Kč)</th>
+      </tr>
+    </thead>
+    <tbody id="seasonHistoryTable"></tbody>
+  </table>
+</div>
+
 <div id="totalHistoryBox" class="card" style="display:none;margin-top:20px">
   <h2>📈 Celková historie – od začátku měření</h2>
   <table>
@@ -195,14 +214,15 @@ footer img:hover{
 <h2>⚙️ Nastavení</h2>
 <div class="settings">
   <div>
-    <label>Kg uhlí / 10 min</label>
-    <input type="number" id="kg10min" step="0.1">
+    <div class="sub">Kg uhlí / 10 min chodu podavače</div>
+    <div class="value blue" id="kg10minInfo">--</div>
   </div>
   <div>
-    <label>Cena / kg</label>
-    <input type="number" id="priceKg" step="0.1">
+    <div class="sub">Cena / kg</div>
+    <div class="value blue" id="priceKgInfo">--</div>
   </div>
 </div>
+<div class="sub" style="margin-top:10px">Hodnoty se mění v kódu stránky (index.html) – KG_PER_10MIN a PRICE_PER_KG.</div>
 </div>
 
 </main>
@@ -215,8 +235,13 @@ const OUT_FIELD = 1;           // ← field číslo (1–8)
 const ENERGY = 4.8;
 const EFF = 0.75;
 
-kg10min.value = localStorage.kg10min || 2.5;
-priceKg.value = localStorage.priceKg || 6.2;
+// ── Jednotné nastavení ──────────────────────────────────────────────
+const KG_PER_10MIN = 2.4;   // kg uhlí za 10 min chodu podavače
+const PRICE_PER_KG = 6.4;   // Kč za 1 kg uhlí
+const TZ = "Europe/Prague";
+const DATA_FROM = "2023-01-01 00:00:00"; // odkud hledat data pro celkovou/sezónní historii
+kg10minInfo.textContent = KG_PER_10MIN.toLocaleString("cs-CZ") + " kg";
+priceKgInfo.textContent = PRICE_PER_KG.toLocaleString("cs-CZ") + " Kč";
 
 function updateClock(){
   clock.textContent = new Date().toLocaleString("cs-CZ");
@@ -231,34 +256,76 @@ function secToHMS(sec){
 }
 
 function secToKg(sec){
-  return Math.max(0,(sec/600)*(+kg10min.value||2.5));
+  return Math.max(0,(sec/600)*KG_PER_10MIN);
 }
 
-function todayStartISO(){
-  const d = new Date();
-  d.setHours(0,0,0,0);
-  return localISO(d);
-}
-
-
-function localISO(d){
+// datum → "YYYY-MM-DD HH:MM:SS" v místním čase (ThingSpeak s timezone=Europe/Prague)
+function tsLocal(d){
   const z = n => String(n).padStart(2,"0");
-  return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}T${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+  return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
 }
+function todayStart(){ const d=new Date(); d.setHours(0,0,0,0); return d; }
+function monthStart(){ const d=todayStart(); d.setDate(1); return d; }
+function dayKey(d){ return d.toLocaleDateString("cs-CZ"); }
+function monthKey(d){ return d.getFullYear()*100 + d.getMonth(); }
 
-function monthStartISO(){
-  const d = new Date();
-  d.setDate(1);
-  d.setHours(0,0,0,0);
-  return localISO(d);
-}
-
+// ── Topná sezóna: 1. září – 31. srpna ──────────────────────────────
+function seasonStartYear(d){ return d.getMonth() >= 8 ? d.getFullYear() : d.getFullYear() - 1; }
+function seasonName(y){ return `${y}/${y+1}`; }
 
 async function fetchFeeds(p){
   try{
-    const r=await fetch(`https://api.thingspeak.com/channels/${CHANNEL}/feeds.json?${p}`);
+    const r=await fetch(`https://api.thingspeak.com/channels/${CHANNEL}/feeds.json?timezone=${TZ}&${p}`);
     return (await r.json()).feeds||[];
   }catch(e){return[];}
+}
+
+// Součet chodu podavače z po sobě jdoucích hodnot čítače (field8).
+// Pokles čítače = restart NodeMCU (vrácení na hodnotu z EEPROM) → nepočítá se.
+// Když čítač spadne skoro na nulu (nový začátek), započítá se nová hodnota.
+function feederDiffs(points){
+  const out=[];
+  for(let i=1;i<points.length;i++){
+    const a=points[i-1].v, b=points[i].v;
+    let sec=b-a;
+    if(sec<0) sec = b < 3600 ? b : 0;
+    out.push({t:points[i-1].t, sec});
+  }
+  return out;
+}
+function toPoints(feeds){
+  return feeds
+    .map(f=>({t:new Date(f.created_at), v:parseFloat(f.field8)}))
+    .filter(p=>Number.isFinite(p.v) && !isNaN(p.t));
+}
+
+// Hodinová řada čítače od DATA_FROM do teď (po částech, ThingSpeak vrací max 8000 bodů).
+// Uloží se na 15 minut, aby se data nestahovala pro každé tlačítko znovu.
+let seriesCache=null, seriesTime=0;
+async function hourlySeries(){
+  if(seriesCache && Date.now()-seriesTime < 15*60000) return seriesCache;
+  const CHUNK_DAYS=300;
+  let start=new Date(DATA_FROM.replace(" ","T"));
+  const now=new Date();
+  let pts=[];
+  while(start<now){
+    const end=new Date(start); end.setDate(end.getDate()+CHUNK_DAYS);
+    const f=await fetchFeeds(`timescale=60&start=${encodeURIComponent(tsLocal(start))}&end=${encodeURIComponent(tsLocal(end<now?end:now))}&results=8000`);
+    pts=pts.concat(toPoints(f));
+    start=end;
+  }
+  // poslední aktuální hodnota, aby byla započítaná i rozběhnutá hodina
+  const last=toPoints(await fetchFeeds("results=1"));
+  pts=pts.concat(last);
+  pts.sort((a,b)=>a.t-b.t);
+  pts=pts.filter((p,i)=>i===0 || p.t-pts[i-1].t>0);
+  seriesCache=feederDiffs(pts); seriesTime=Date.now();
+  return seriesCache;
+}
+function sumKg(diffs, from, to){
+  let sec=0;
+  for(const d of diffs) if(d.t>=from && (!to || d.t<to)) sec+=d.sec;
+  return secToKg(sec);
 }
 
 async function updateCurrent(){
@@ -270,8 +337,7 @@ async function updateCurrent(){
 
   tKotel.textContent=tK.toFixed(1)+" °C";
   tZpet.textContent=tZ.toFixed(1)+" °C";
-  
-  
+
   deltaT.textContent=(tK-tZ).toFixed(1)+" °C";
 
   const totalSec=+f.field8||0;
@@ -295,119 +361,102 @@ async function updateOutsideTemp(){
 
 async function updateHour(){
   const f=await fetchFeeds("minutes=60&results=120");
-  if(f.length<2)return;
-  const kg=secToKg(f.at(-1).field8-f[0].field8);
+  const d=feederDiffs(toPoints(f));
+  if(!d.length)return;
+  const kg=secToKg(d.reduce((s,x)=>s+x.sec,0));
   kgHour.textContent=kg.toFixed(2)+" kg";
   powerKWbig.textContent=(kg*ENERGY*EFF).toFixed(1)+" kWh";
 }
 
 async function updateDay(){
-  const f=await fetchFeeds("start="+todayStartISO()+"&results=2000");
-  if(f.length<2)return;
-  const kg=secToKg(f.at(-1).field8-f[0].field8);
+  const f=await fetchFeeds(`start=${encodeURIComponent(tsLocal(todayStart()))}&results=2000`);
+  const d=feederDiffs(toPoints(f));
+  const kg=secToKg(d.reduce((s,x)=>s+x.sec,0));
   kgDay.textContent=kg.toFixed(0)+" kg";
-  costDay.textContent=(kg*(+priceKg.value||6.2)).toFixed(0)+" Kč";
+  costDay.textContent=(kg*PRICE_PER_KG).toFixed(0)+" Kč";
 }
 
 async function updateMonth(){
-  const f = await fetchFeeds(
-    "start=" + monthStartISO() + "&results=8000"
-  );
-  if(f.length < 2){
-    kgMonth.textContent = "0 kg";
-    costMonth.textContent = "0 Kč";
-    return;
-  }
-
-  const sec = f.at(-1).field8 - f[0].field8;
-  const kg = secToKg(sec);
-
+  const diffs=await hourlySeries();
+  const kg=sumKg(diffs, monthStart());
   kgMonth.textContent = kg.toFixed(0) + " kg";
-  costMonth.textContent =
-    (kg * (+priceKg.value || 6.2)).toFixed(0) + " Kč";
+  costMonth.textContent = (kg * PRICE_PER_KG).toFixed(0) + " Kč";
 }
 
+async function updateSeason(){
+  const diffs=await hourlySeries();
+  const y=seasonStartYear(new Date());
+  const kg=sumKg(diffs, new Date(y,8,1));
+  seasonLabel.textContent = seasonName(y);
+  kgSeason.textContent = kg.toFixed(0) + " kg";
+  costSeason.textContent = (kg * PRICE_PER_KG).toFixed(0) + " Kč";
+}
+
+function row(label, kg){
+  return `<tr><td>${label}</td><td>${kg.toFixed(0)}</td><td>${(kg*PRICE_PER_KG).toFixed(0)}</td></tr>`;
+}
 
 historyBtn.onclick=async()=>{
   historyBox.style.display=historyBox.style.display==="none"?"block":"none";
   historyTable.innerHTML="";
-  const price=+priceKg.value||6.2;
-  for(let i=0;i<14;i++){
-    const d1=new Date();d1.setDate(d1.getDate()-i);d1.setHours(0,0,0,0);
-    const d2=new Date(d1);d2.setDate(d2.getDate()+1);
-   const f = await fetchFeeds(`start=${localISO(d1)}&end=${localISO(d2)}&results=2000`);
-
-    if(f.length>1){
-      const kg=secToKg(f.at(-1).field8-f[0].field8);
-      historyTable.innerHTML+=`<tr><td>${d1.toLocaleDateString("cs-CZ")}</td><td>${kg.toFixed(0)}</td><td>${(kg*price).toFixed(0)}</td></tr>`;
-    }
+  const diffs=await hourlySeries();
+  let html="";
+  for(let i=0;i<30;i++){
+    const d1=todayStart(); d1.setDate(d1.getDate()-i);
+    const d2=new Date(d1); d2.setDate(d2.getDate()+1);
+    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(diffs,d1,d2));
   }
+  historyTable.innerHTML=html;
 };
 
 monthHistoryBtn.onclick = async () => {
   monthHistoryBox.style.display =
     monthHistoryBox.style.display === "none" ? "block" : "none";
-
   monthHistoryTable.innerHTML = "";
-  const price = +priceKg.value || 6.2;
-
+  const diffs=await hourlySeries();
+  let html="";
   for (let i = 0; i < 12; i++) {
-    const s = new Date();
-    s.setMonth(s.getMonth() - i, 1);
-    s.setHours(0, 0, 0, 0);
-
-    const e = new Date(s);
-    e.setMonth(e.getMonth() + 1);
-
-    const f = await fetchFeeds(
-      `start=${localISO(s)}&end=${localISO(e)}&results=8000`
-    );
-
-    if (f.length > 1) {
-      const kg = secToKg(f.at(-1).field8 - f[0].field8);
-      monthHistoryTable.innerHTML += `<tr>
-        <td>${s.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" })}</td>
-        <td>${kg.toFixed(0)}</td>
-        <td>${(kg * price).toFixed(0)}</td>
-      </tr>`;
-    }
+    const s = monthStart(); s.setMonth(s.getMonth() - i);
+    const e = new Date(s); e.setMonth(e.getMonth() + 1);
+    html+=row(s.toLocaleDateString("cs-CZ", { month: "long", year: "numeric" }), sumKg(diffs,s,e));
   }
+  monthHistoryTable.innerHTML=html;
 };
 
+seasonHistoryBtn.onclick = async () => {
+  seasonHistoryBox.style.display =
+    seasonHistoryBox.style.display === "none" ? "block" : "none";
+  seasonHistoryTable.innerHTML = "";
+  const diffs=await hourlySeries();
+  const seasons={};
+  for(const d of diffs){ const y=seasonStartYear(d.t); seasons[y]=(seasons[y]||0)+d.sec; }
+  const keys=Object.keys(seasons).map(Number).sort((a,b)=>b-a);
+  seasonHistoryTable.innerHTML = keys.length
+    ? keys.map(y=>row(seasonName(y), secToKg(seasons[y]))).join("")
+    : `<tr><td colspan="3">⛔ Zatím nejsou žádná data</td></tr>`;
+};
 
 totalHistoryBtn.onclick = async () => {
   totalHistoryBox.style.display =
     totalHistoryBox.style.display === "none" ? "block" : "none";
-
   totalHistoryTable.innerHTML = "";
-
-  const price = +priceKg.value || 6.2;
-
-  const f = await fetchFeeds("results=8000");
-  if (f.length < 2) return;
-
-  const sec = f.at(-1).field8 - f[0].field8;
-  const kg = secToKg(sec);
-  const cost = kg * price;
-
-  totalHistoryTable.innerHTML = `
-    <tr>
-      <td>Celé období (${new Date(f[0].created_at).toLocaleDateString("cs-CZ")} – ${new Date(f.at(-1).created_at).toLocaleDateString("cs-CZ")})</td>
-      <td>${kg.toFixed(1)}</td>
-      <td>${cost.toFixed(0)}</td>
-    </tr>
-  `;
+  const diffs=await hourlySeries();
+  if(!diffs.length){
+    totalHistoryTable.innerHTML = `<tr><td colspan="3">⛔ Zatím nejsou žádná data</td></tr>`;
+    return;
+  }
+  const kg=secToKg(diffs.reduce((s,x)=>s+x.sec,0));
+  totalHistoryTable.innerHTML = row(
+    `Celé období (${diffs[0].t.toLocaleDateString("cs-CZ")} – ${new Date().toLocaleDateString("cs-CZ")})`, kg);
 };
 
-kg10min.oninput=()=>{localStorage.kg10min=kg10min.value;updateHour();updateDay();updateMonth();}
-priceKg.oninput=()=>{localStorage.priceKg=priceKg.value;updateDay();updateMonth();}
-
-updateClock();updateCurrent();updateHour();updateDay();updateMonth();updateOutsideTemp();
+updateClock();updateCurrent();updateHour();updateDay();updateMonth();updateSeason();updateOutsideTemp();
 setInterval(updateClock,1000);
 setInterval(updateCurrent,30000);
 setInterval(updateHour,300000);
 setInterval(updateDay,900000);
 setInterval(updateMonth,1800000);
+setInterval(updateSeason,1800000);
 setInterval(updateOutsideTemp,300000);
   
 fullscreenBtn.onclick = () => {
