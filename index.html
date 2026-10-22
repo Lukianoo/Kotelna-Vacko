@@ -65,6 +65,10 @@ button{
 table{width:100%;border-collapse:collapse}
 th,td{padding:8px;text-align:center}
 th{background:#eee}
+/* oddělení řádků v tabulkách historie */
+tbody tr{border-bottom:1px solid #d9d9d9}
+tbody tr:last-child{border-bottom:none}
+tbody tr:hover{background:#f5f8ff}
 footer img{
   transition: .3s;
 }
@@ -161,6 +165,7 @@ footer img:hover{
         <th>Datum</th>
         <th>Spotřeba (kg)</th>
         <th>Cena (Kč)</th>
+        <th>Ø teplota venku</th>
       </tr>
     </thead>
     <tbody id="historyTable"></tbody>
@@ -408,15 +413,41 @@ function sumCost(days, from, to){
   return c;
 }
 
+// ── Průměrná denní teplota venku ────────────────────────────────────
+// ThingSpeak average=daily; stahuje se po 10 dnech (limit 8000 záznamů na dotaz).
+function ymd(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function tsTZ(d){ return ymd(d)+" "+[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,"0")).join(":"); }
+async function dailyAvgTemp(channel, field, from, to){
+  const res={};
+  let s=new Date(from);
+  while(s<to){
+    const e=new Date(s); e.setDate(e.getDate()+10);
+    const end = e<to ? e : to;
+    try{
+      const j=await fetch(`https://api.thingspeak.com/channels/${channel}/fields/${field}.json?timezone=Europe/Prague&average=daily`
+        +`&start=${encodeURIComponent(tsTZ(s))}&end=${encodeURIComponent(tsTZ(end))}`).then(r=>r.json());
+      for(const f of j.feeds||[]){
+        const v=parseFloat(f[`field${field}`]);
+        if(Number.isFinite(v) && v>-50 && v<60) res[f.created_at.slice(0,10)]=v;
+      }
+    }catch(e){}
+    s=end;
+  }
+  return res;
+}
+function fmtTemp(t){ return Number.isFinite(t) ? t.toFixed(1)+" °C" : "–"; }
 historyBtn.onclick=async()=>{
   historyBox.style.display=historyBox.style.display==="none"?"block":"none";
   historyTable.innerHTML="";
   const days=await loadDaily();
+  const tFrom=todayStart(); tFrom.setDate(tFrom.getDate()-29);
+  const tTo=todayStart(); tTo.setDate(tTo.getDate()+1);
+  const temps=await dailyAvgTemp(OUT_CHANNEL, OUT_FIELD, tFrom, tTo);
   let html="";
   for(let i=0;i<30;i++){
     const d1=todayStart(); d1.setDate(d1.getDate()-i);
     const d2=new Date(d1); d2.setDate(d2.getDate()+1);
-    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2), sumCost(days,d1,d2));
+    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2), sumCost(days,d1,d2)).replace("</tr>", `<td>${fmtTemp(temps[ymd(d1)])}</td></tr>`);
   }
   historyTable.innerHTML=html;
 };
