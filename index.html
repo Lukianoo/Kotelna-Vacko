@@ -84,6 +84,9 @@ th{background:#eee}
 tbody tr{border-bottom:1px solid #d9d9d9}
 tbody tr:last-child{border-bottom:none}
 tbody tr:hover{background:#f5f8ff}
+/* víkendy v denní historii */
+tbody tr.weekend{background:#fff6e5}
+tbody tr.weekend:hover{background:#ffedcc}
 footer img{
   transition: .3s;
 }
@@ -466,7 +469,7 @@ historyBtn.onclick=async()=>{
   for(let i=0;i<30;i++){
     const d1=todayStart(); d1.setDate(d1.getDate()-i);
     const d2=new Date(d1); d2.setDate(d2.getDate()+1);
-    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2), sumCost(days,d1,d2)).replace("</tr>", `<td>${fmtTemp(temps[ymd(d1)])}</td></tr>`);
+    html+=row(d1.toLocaleDateString("cs-CZ"), sumKg(days,d1,d2), sumCost(days,d1,d2)).replace("<tr>", (d1.getDay()===0||d1.getDay()===6) ? '<tr class="weekend">' : "<tr>").replace("</tr>", `<td>${fmtTemp(temps[ymd(d1)])}</td></tr>`);
   }
   historyTable.innerHTML=html;
 };
